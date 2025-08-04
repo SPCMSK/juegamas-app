@@ -1,12 +1,22 @@
-import { useState } from "react";
-import { X, Calendar, Clock, MapPin, CreditCard, CheckCircle } from "lucide-react";
+import { useState, useEffect } from "react";
+import { X, Calendar, Clock, MapPin, CreditCard, CheckCircle, Tag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { format, parseISO } from "date-fns";
 import { es } from "date-fns/locale";
+import { useBookings } from "@/hooks/useBookings";
+import { useCourts } from "@/hooks/useCourts";
+import { useDiscountCodes } from "@/hooks/useDiscountCodes";
+import { useAuth } from "@/contexts/AuthContext";
+import type { Database } from "@/lib/supabase";
+
+type Court = Database['public']['Tables']['courts']['Row'];
 
 interface TimeSlot {
   id: string;
@@ -18,34 +28,102 @@ interface TimeSlot {
   processing?: boolean;
 }
 
-interface Court {
-  id: string;
-  name: string;
-  type: string;
-  pricePerHour: number;
-}
-
 interface BookingPanelProps {
   isOpen: boolean;
   onClose: () => void;
   slot: TimeSlot | null;
-  court: Court | null;
-  onConfirm: (slot: TimeSlot) => Promise<void>;
-  isProcessing: boolean;
+  onConfirm: () => void;
 }
 
-export function BookingPanel({ isOpen, onClose, slot, court, onConfirm, isProcessing }: BookingPanelProps) {
+export function BookingPanel({ isOpen, onClose, slot, onConfirm }: BookingPanelProps) {
   const [isConfirming, setIsConfirming] = useState(false);
+  const [discountCode, setDiscountCode] = useState("");
+  const [discountValidation, setDiscountValidation] = useState<any>(null);
+  const [notes, setNotes] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("transfer");
+  
+  const { user } = useAuth();
+  const { createBooking, loading: bookingLoading } = useBookings();
+  const { courts, getCourtById } = useCourts();
+  const { validateDiscountCode, applyDiscountCode } = useDiscountCodes();
+  
+  const [court, setCourt] = useState<Court | null>(null);
+  
+  // Get court details when slot changes
+  useEffect(() => {
+    if (slot?.courtId) {
+      getCourtById(slot.courtId).then(setCourt);
+    }
+  }, [slot?.courtId, getCourtById]);
 
-  if (!slot || !court) return null;
+  // Calculate pricing
+  const basePrice = slot?.price || 0;
+  const discountAmount = discountValidation?.valid ? discountValidation.discount : 0;
+  const finalPrice = Math.max(basePrice - discountAmount, 0);
+
+  const handleDiscountValidation = async () => {
+    if (!discountCode.trim() || !slot) return;
+    
+    try {
+      const validation = await validateDiscountCode(
+        discountCode.trim(),
+        basePrice,
+        slot.date,
+        slot.time
+      );
+      setDiscountValidation(validation);
+    } catch (error) {
+      setDiscountValidation({
+        valid: false,
+        discount: 0,
+        message: "Error al validar el código"
+      });
+    }
+  };
 
   const handleConfirm = async () => {
+    if (!slot || !court || !user) return;
+    
     setIsConfirming(true);
     try {
-      await onConfirm(slot);
+      // Calculate end time (1 hour after start time)
+      const [hour, minute] = slot.time.split(':').map(Number);
+      const endHour = hour + 1;
+      const endTime = `${endHour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+      
+      const bookingData = {
+        court_id: slot.courtId,
+        booking_date: slot.date,
+        start_time: slot.time,
+        end_time: endTime,
+        total_price: finalPrice,
+        discount_applied: discountAmount,
+        discount_code: discountValidation?.valid ? discountCode.trim() : null,
+        payment_method: paymentMethod,
+        notes: notes.trim() || null,
+        status: 'pending' as const,
+        payment_status: 'pending' as const
+      };
+      
+      const booking = await createBooking(bookingData);
+      
+      // Apply discount code if valid
+      if (discountValidation?.valid && discountValidation.code) {
+        await applyDiscountCode(discountValidation.code.id);
+      }
+      
+      onConfirm();
       onClose();
+      
+      // Reset form
+      setDiscountCode("");
+      setDiscountValidation(null);
+      setNotes("");
+      setPaymentMethod("transfer");
+      
     } catch (error) {
-      console.error("Error confirming booking:", error);
+      console.error("Error creating booking:", error);
+      // You could add a toast notification here
     } finally {
       setIsConfirming(false);
     }
@@ -55,6 +133,8 @@ export function BookingPanel({ isOpen, onClose, slot, court, onConfirm, isProces
     const date = parseISO(dateStr + 'T00:00:00');
     return format(date, "EEEE, d 'de' MMMM", { locale: es });
   };
+
+  if (!slot || !court) return null;
 
   return (
     <>
@@ -104,7 +184,7 @@ export function BookingPanel({ isOpen, onClose, slot, court, onConfirm, isProces
                     </div>
                     <div>
                       <p className="font-medium">{court.name}</p>
-                      <Badge variant="secondary" className="text-xs">{court.type}</Badge>
+                      <Badge>{court.type}</Badge>
                     </div>
                   </div>
                   
@@ -184,7 +264,7 @@ export function BookingPanel({ isOpen, onClose, slot, court, onConfirm, isProces
             <Button 
               onClick={handleConfirm}
               className="w-full bg-gradient-primary hover:opacity-90 text-lg py-3"
-              disabled={isConfirming || isProcessing}
+              disabled={isConfirming || bookingLoading}
             >
               {isConfirming ? (
                 <div className="flex items-center gap-2">

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { addDays, format, startOfWeek, endOfWeek, eachDayOfInterval, isSameDay, isPast, parseISO } from "date-fns";
+import { addDays, format, startOfWeek, endOfWeek, eachDayOfInterval, isSameDay, isPast } from "date-fns";
 import { es } from "date-fns/locale";
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -7,13 +7,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { useCourts } from "@/hooks/useCourts";
+import { useBookings } from "@/hooks/useBookings";
+import { useAuth } from "@/contexts/AuthContext";
+import type { Database } from "@/lib/supabase";
 
-interface Court {
-  id: string;
-  name: string;
-  type: string;
-  pricePerHour: number;
-}
+type Court = Database['public']['Tables']['courts']['Row'];
 
 interface TimeSlot {
   id: string;
@@ -26,273 +25,251 @@ interface TimeSlot {
 }
 
 interface CalendarViewProps {
-  courts: Court[];
   onSlotSelect: (slot: TimeSlot) => void;
   selectedSlot: TimeSlot | null;
-  optimisticBookings: Set<string>;
 }
 
-export function CalendarView({ courts, onSlotSelect, selectedSlot, optimisticBookings }: CalendarViewProps) {
+export function CalendarView({ onSlotSelect, selectedSlot }: CalendarViewProps) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedCourt, setSelectedCourt] = useState<string>("all");
   const [viewMode, setViewMode] = useState<"week" | "day">("week");
+  const [dateBookings, setDateBookings] = useState<any[]>([]);
   
-  // Generate time slots from 8 AM to 11 PM
-  const timeSlots = Array.from({ length: 15 }, (_, i) => {
-    const hour = 8 + i;
+  const { user } = useAuth();
+  const { courts, loading: courtsLoading, calculatePrice } = useCourts();
+  const { getBookingsByDate } = useBookings();
+  
+  // Generate time slots from 7 PM to 11 PM (19:00 - 23:00) with 1-hour intervals
+  const timeSlots = Array.from({ length: 5 }, (_, i) => {
+    const hour = 19 + i;
     return `${hour.toString().padStart(2, '0')}:00`;
   });
 
-  // Get current week or day dates
+  // Load bookings when date changes
+  useEffect(() => {
+    const loadBookings = async () => {
+      const dateStr = format(currentDate, 'yyyy-MM-dd');
+      const bookings = await getBookingsByDate(dateStr);
+      setDateBookings(bookings);
+    };
+    
+    loadBookings();
+  }, [currentDate, getBookingsByDate]);
+
+  // Check if a slot is booked
+  const isSlotBooked = (courtId: string, date: Date, time: string): boolean => {
+    const dateStr = format(date, 'yyyy-MM-dd');
+    return dateBookings.some(booking => 
+      booking.court_id === courtId && 
+      booking.booking_date === dateStr && 
+      booking.start_time === time
+    );
+  };
+
   const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
   const weekEnd = endOfWeek(currentDate, { weekStartsOn: 1 });
-  const daysToShow = viewMode === "week" 
+  const daysToShow = viewMode === "week"
     ? eachDayOfInterval({ start: weekStart, end: weekEnd })
     : [currentDate];
 
-  // Mock data generator - replace with real API call
-  const generateTimeSlots = (): TimeSlot[] => {
-    const slots: TimeSlot[] = [];
-    
+  // Generate slots for the view
+  const slots: TimeSlot[] = [];
+  if (courts.length > 0) {
     courts.forEach(court => {
       if (selectedCourt !== "all" && court.id !== selectedCourt) return;
       
       daysToShow.forEach(date => {
         timeSlots.forEach(time => {
           const slotId = `${court.id}-${format(date, 'yyyy-MM-dd')}-${time}`;
-          const isBooked = Math.random() > 0.7; // 30% chance of being booked
-          const isPastSlot = isPast(parseISO(`${format(date, 'yyyy-MM-dd')}T${time}:00`));
-          const isOptimistic = optimisticBookings.has(slotId);
+          const isBooked = isSlotBooked(court.id, date, time);
+          const isPastSlot = isPast(new Date(`${format(date, 'yyyy-MM-dd')}T${time}`));
+          
+          const slotPrice = calculatePrice(court, format(date, 'yyyy-MM-dd'), time);
           
           slots.push({
             id: slotId,
             time,
             courtId: court.id,
             date: format(date, 'yyyy-MM-dd'),
-            price: court.pricePerHour,
-            available: !isBooked && !isPastSlot && !isOptimistic,
-            processing: isOptimistic
+            price: slotPrice,
+            available: !isBooked && !isPastSlot,
+            processing: false
           });
         });
       });
     });
-    
-    return slots;
+  }
+
+  const navigateWeek = (direction: "prev" | "next") => {
+    const days = viewMode === "week" ? 7 : 1;
+    setCurrentDate(prev => addDays(prev, direction === "next" ? days : -days));
   };
 
-  const slots = generateTimeSlots();
-
-  const handlePrevious = () => {
-    setCurrentDate(prev => addDays(prev, viewMode === "week" ? -7 : -1));
+  const goToToday = () => {
+    setCurrentDate(new Date());
   };
 
-  const handleNext = () => {
-    setCurrentDate(prev => addDays(prev, viewMode === "week" ? 7 : 1));
-  };
+  const filteredCourts = courts.filter(court => 
+    selectedCourt === "all" || court.id === selectedCourt
+  );
 
-  const getSlotStatus = (slot: TimeSlot) => {
-    if (slot.processing) return "processing";
-    if (!slot.available) return "unavailable";
-    if (selectedSlot?.id === slot.id) return "selected";
-    return "available";
-  };
-
-  const getSlotStyles = (status: string) => {
-    const base = "h-12 rounded-lg border-2 transition-all duration-200 cursor-pointer flex items-center justify-center text-xs font-medium";
-    
-    switch (status) {
-      case "available":
-        return cn(base, "border-primary/20 bg-gradient-to-r from-success/10 to-success/5 hover:border-primary/40 hover:from-success/20 hover:to-success/10 text-success-foreground hover:scale-[1.02]");
-      case "selected":
-        return cn(base, "border-primary bg-primary text-primary-foreground shadow-sport scale-[1.02]");
-      case "processing":
-        return cn(base, "border-warning/40 bg-warning/10 text-warning-foreground animate-pulse");
-      case "unavailable":
-        return cn(base, "border-muted bg-muted/30 text-muted-foreground cursor-not-allowed opacity-60");
-      default:
-        return base;
-    }
-  };
-
-  return (
-    <div className="space-y-6">
-      {/* Controls */}
-      <Card className="shadow-card">
-        <CardHeader className="pb-4">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handlePrevious}
-                className="flex items-center gap-2"
-              >
-                <ChevronLeft className="h-4 w-4" />
-                {viewMode === "week" ? "Sem. Anterior" : "Día Anterior"}
-              </Button>
-              
-              <div className="text-center">
-                <h2 className="text-lg font-semibold">
-                  {viewMode === "week" 
-                    ? `${format(weekStart, 'd MMM', { locale: es })} - ${format(weekEnd, 'd MMM yyyy', { locale: es })}`
-                    : format(currentDate, 'EEEE, d MMMM yyyy', { locale: es })
-                  }
-                </h2>
-              </div>
-              
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleNext}
-                className="flex items-center gap-2"
-              >
-                {viewMode === "week" ? "Sem. Siguiente" : "Día Siguiente"}
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-            </div>
-            
-            <div className="flex items-center gap-2">
-              <Select value={viewMode} onValueChange={(value: "week" | "day") => setViewMode(value)}>
-                <SelectTrigger className="w-24">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="week">Semana</SelectItem>
-                  <SelectItem value="day">Día</SelectItem>
-                </SelectContent>
-              </Select>
-              
-              <Select value={selectedCourt} onValueChange={setSelectedCourt}>
-                <SelectTrigger className="w-48">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todas las canchas</SelectItem>
-                  {courts.map(court => (
-                    <SelectItem key={court.id} value={court.id}>
-                      {court.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </CardHeader>
-      </Card>
-
-      {/* Calendar Grid */}
-      <div className="space-y-6">
-        {courts
-          .filter(court => selectedCourt === "all" || court.id === selectedCourt)
-          .map(court => (
-            <Card key={court.id} className="shadow-card">
-              <CardHeader className="pb-4">
-                <CardTitle className="flex items-center gap-2">
-                  <MapPin className="h-5 w-5 text-primary" />
-                  {court.name}
-                  <Badge variant="secondary">{court.type}</Badge>
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <div className="min-w-[800px]">
-                    {/* Header with days */}
-                    <div className="grid grid-cols-[100px_1fr] gap-2 mb-4">
-                      <div className="h-10 flex items-center justify-center text-sm font-medium text-muted-foreground">
-                        Hora
-                      </div>
-                      <div className={`grid gap-2 ${viewMode === "week" ? "grid-cols-7" : "grid-cols-1"}`}>
-                        {daysToShow.map(date => (
-                          <div key={date.toISOString()} className="h-10 flex flex-col items-center justify-center text-sm font-medium bg-gradient-card rounded-lg">
-                            <span className="text-xs text-muted-foreground">
-                              {format(date, 'EEE', { locale: es })}
-                            </span>
-                            <span className={cn(
-                              "font-semibold",
-                              isSameDay(date, new Date()) && "text-primary"
-                            )}>
-                              {format(date, 'd')}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Time slots grid */}
-                    <div className="space-y-2">
-                      {timeSlots.map(time => (
-                        <div key={time} className="grid grid-cols-[100px_1fr] gap-2">
-                          <div className="h-12 flex items-center justify-center text-sm font-medium text-muted-foreground bg-muted/30 rounded-lg">
-                            {time}
-                          </div>
-                          <div className={`grid gap-2 ${viewMode === "week" ? "grid-cols-7" : "grid-cols-1"}`}>
-                            {daysToShow.map(date => {
-                              const slot = slots.find(s => 
-                                s.courtId === court.id && 
-                                s.date === format(date, 'yyyy-MM-dd') && 
-                                s.time === time
-                              );
-                              
-                              if (!slot) return <div key={date.toISOString()} className="h-12" />;
-                              
-                              const status = getSlotStatus(slot);
-                              
-                              return (
-                                <div
-                                  key={slot.id}
-                                  className={getSlotStyles(status)}
-                                  onClick={() => {
-                                    if (status === "available") {
-                                      onSlotSelect(slot);
-                                    }
-                                  }}
-                                >
-                                  {status === "processing" ? (
-                                    <div className="animate-spin w-4 h-4 border-2 border-warning border-t-transparent rounded-full" />
-                                  ) : status === "available" ? (
-                                    <span>${slot.price.toLocaleString()}</span>
-                                  ) : status === "selected" ? (
-                                    <span>Seleccionado</span>
-                                  ) : (
-                                    <span>Ocupado</span>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-      </div>
-
-      {/* Legend */}
-      <Card className="bg-gradient-card">
-        <CardContent className="pt-6">
-          <div className="flex flex-wrap items-center gap-4 text-sm">
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded bg-gradient-to-r from-success/20 to-success/10 border border-primary/20" />
-              <span>Disponible</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded bg-primary border-2 border-primary" />
-              <span>Seleccionado</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded bg-warning/10 border border-warning/40" />
-              <span>Procesando</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded bg-muted/30 border border-muted" />
-              <span>No disponible</span>
-            </div>
+  if (courtsLoading) {
+    return (
+      <Card>
+        <CardContent className="p-6">
+          <div className="flex items-center justify-center h-40">
+            <div className="text-muted-foreground">Cargando canchas...</div>
           </div>
         </CardContent>
       </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header Controls */}
+      <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => navigateWeek("prev")}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          
+          <div className="flex items-center gap-2">
+            <CalendarIcon className="h-4 w-4" />
+            <span className="font-medium">
+              {viewMode === "week" 
+                ? `${format(weekStart, 'dd MMM', { locale: es })} - ${format(weekEnd, 'dd MMM yyyy', { locale: es })}`
+                : format(currentDate, 'dd MMMM yyyy', { locale: es })
+              }
+            </span>
+          </div>
+          
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => navigateWeek("next")}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+          
+          <Button variant="outline" onClick={goToToday}>
+            Hoy
+          </Button>
+        </div>
+
+        <div className="flex gap-2">
+          <Select value={selectedCourt} onValueChange={setSelectedCourt}>
+            <SelectTrigger className="w-48">
+              <SelectValue placeholder="Seleccionar cancha" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas las canchas</SelectItem>
+              {courts.map((court) => (
+                <SelectItem key={court.id} value={court.id}>
+                  {court.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select value={viewMode} onValueChange={(value: "week" | "day") => setViewMode(value)}>
+            <SelectTrigger className="w-32">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="week">Semana</SelectItem>
+              <SelectItem value="day">Día</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {/* Calendar Grid */}
+      <div className="grid gap-4">
+        {daysToShow.map((date) => (
+          <Card key={date.toISOString()}>
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <CalendarIcon className="h-5 w-5" />
+                {format(date, 'EEEE dd MMMM', { locale: es })}
+                {isSameDay(date, new Date()) && (
+                  <Badge variant="secondary">Hoy</Badge>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {filteredCourts.map((court) => (
+                  <div key={court.id} className="space-y-2">
+                    <div className="flex items-center gap-2 font-medium">
+                      <MapPin className="h-4 w-4" />
+                      <span>{court.name}</span>
+                      <Badge variant="outline">{court.type}</Badge>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+                      {timeSlots.map((time) => {
+                        const slot = slots.find(s => 
+                          s.courtId === court.id && 
+                          s.date === format(date, 'yyyy-MM-dd') && 
+                          s.time === time
+                        );
+                        
+                        if (!slot) return null;
+                        
+                        const isSelected = selectedSlot?.id === slot.id;
+                        
+                        return (
+                          <Button
+                            key={`${court.id}-${time}`}
+                            variant={isSelected ? "default" : slot.available ? "outline" : "secondary"}
+                            className={cn(
+                              "h-16 flex flex-col items-center justify-center text-xs",
+                              {
+                                "opacity-50 cursor-not-allowed": !slot.available,
+                                "ring-2 ring-primary": isSelected,
+                              }
+                            )}
+                            onClick={() => slot.available && onSlotSelect(slot)}
+                            disabled={!slot.available || !user}
+                          >
+                            <span className="font-medium">{time}</span>
+                            <span className="text-xs opacity-75">
+                              ${slot.price.toLocaleString()}
+                            </span>
+                            {!slot.available && !isPast(new Date(`${slot.date}T${time}`)) && (
+                              <Badge variant="destructive" className="text-xs">
+                                Ocupado
+                              </Badge>
+                            )}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {!user && (
+        <Card className="border-amber-200 bg-amber-50">
+          <CardContent className="p-4">
+            <div className="text-center text-amber-800">
+              <p className="font-medium">Inicia sesión para reservar</p>
+              <p className="text-sm text-amber-700">
+                Necesitas una cuenta para hacer reservas de canchas
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

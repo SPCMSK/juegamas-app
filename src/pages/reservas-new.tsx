@@ -1,15 +1,13 @@
 import { useState } from "react";
+import { Navigation } from "@/components/ui/navigation";
+import { Footer } from "@/components/ui/footer";
 import { CalendarView } from "@/components/calendar/calendar-view";
 import { BookingPanel } from "@/components/calendar/booking-panel";
-import { Navigation } from "@/components/ui/navigation";
 import { AuthModal } from "@/components/auth/auth-modal";
-import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import { useCourts } from "@/hooks/useCourts";
 import { useBookings } from "@/hooks/useBookings";
-import type { Database } from "@/lib/supabase";
-
-type Court = Database['public']['Tables']['courts']['Row'];
+import { useCourts } from "@/hooks/useCourts";
+import { useToast } from "@/hooks/use-toast";
 
 interface TimeSlot {
   id: string;
@@ -21,22 +19,20 @@ interface TimeSlot {
   processing?: boolean;
 }
 
-export default function ReservasOptimized() {
-  const { user } = useAuth();
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+export default function ReservasPage() {
   const [selectedSlot, setSelectedSlot] = useState<TimeSlot | null>(null);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
   const [isBookingPanelOpen, setIsBookingPanelOpen] = useState(false);
 
+  const { user } = useAuth();
   const { toast } = useToast();
   const { courts, loading: courtsLoading } = useCourts();
   const { createBooking, loading: bookingLoading } = useBookings();
-
   const handleSlotSelect = (slot: TimeSlot) => {
     if (!user) {
-      setIsAuthModalOpen(true);
+      setAuthModalOpen(true);
       return;
     }
-    
     setSelectedSlot(slot);
     setIsBookingPanelOpen(true);
   };
@@ -56,24 +52,19 @@ export default function ReservasOptimized() {
       });
 
       toast({
-        title: "¡Reserva Confirmada!",
-        description: `Tu cancha está reservada para ${selectedSlot.date} a las ${selectedSlot.time}`,
+        title: "¡Reserva creada!",
+        description: "Tu reserva ha sido creada exitosamente. Recibirás un email de confirmación.",
       });
-
+      
       setIsBookingPanelOpen(false);
       setSelectedSlot(null);
     } catch (error) {
       toast({
-        title: "Error en la Reserva",
-        description: "Hubo un problema al procesar tu reserva. Intenta nuevamente.",
+        title: "Error",
+        description: "Hubo un problema al crear la reserva. Intenta nuevamente.",
         variant: "destructive",
       });
     }
-  };
-
-  const getSelectedCourt = (): Court | null => {
-    if (!selectedSlot) return null;
-    return courts.find(court => court.id === selectedSlot.courtId) || null;
   };
 
   if (courtsLoading) {
@@ -93,7 +84,7 @@ export default function ReservasOptimized() {
   return (
     <div className="min-h-screen bg-background">
       <Navigation />
-
+      
       <div className="container mx-auto px-4 py-8 max-w-7xl">
         <div className="mb-8">
           <h1 className="text-3xl font-bold mb-2">Reservar Cancha - Sport La Calera</h1>
@@ -102,12 +93,12 @@ export default function ReservasOptimized() {
           </p>
         </div>
 
-        <CalendarView 
+        <CalendarView
           onSlotSelect={handleSlotSelect}
           selectedSlot={selectedSlot}
         />
 
-        <BookingPanel 
+        <BookingPanel
           isOpen={isBookingPanelOpen}
           onClose={() => {
             setIsBookingPanelOpen(false);
@@ -117,11 +108,13 @@ export default function ReservasOptimized() {
           onConfirm={handleBookingConfirm}
         />
 
-        <AuthModal 
-          isOpen={isAuthModalOpen}
-          onClose={() => setIsAuthModalOpen(false)}
+        <AuthModal
+          isOpen={authModalOpen}
+          onClose={() => setAuthModalOpen(false)}
         />
       </div>
+
+      <Footer />
     </div>
   );
 }

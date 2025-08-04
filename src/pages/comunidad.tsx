@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Navigation } from "@/components/ui/navigation";
+import { Footer } from "@/components/ui/footer";
 import { useToast } from "@/hooks/use-toast";
 
 interface Post {
@@ -26,6 +28,7 @@ interface Post {
 }
 
 export default function Comunidad() {
+  const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState("seeking_team");
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newPost, setNewPost] = useState<{
@@ -149,7 +152,10 @@ export default function Comunidad() {
   const filteredPosts = posts.filter(post => post.type === activeTab);
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-4xl">
+    <div className="min-h-screen bg-background">
+      <Navigation />
+      
+      <div className="container mx-auto px-4 py-8 max-w-4xl">
       <div className="flex flex-col md:flex-row md:items-center justify-between mb-8">
         <div>
           <h1 className="text-3xl font-bold mb-2">Comunidad de Jugadores</h1>
@@ -389,6 +395,9 @@ export default function Comunidad() {
           </Button>
         </div>
       )}
+      </div>
+    
+      <Footer />
     </div>
   );
 }

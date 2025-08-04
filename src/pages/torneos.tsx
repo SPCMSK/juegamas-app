@@ -6,6 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Navigation } from "@/components/ui/navigation";
+import { Footer } from "@/components/ui/footer";
 import { useToast } from "@/hooks/use-toast";
 
 interface Tournament {
@@ -25,6 +27,7 @@ interface Tournament {
 }
 
 export default function Torneos() {
+  const [user, setUser] = useState(null);
   const [selectedTournament, setSelectedTournament] = useState<Tournament | null>(null);
   const [isRegistrationModalOpen, setIsRegistrationModalOpen] = useState(false);
   const [teamName, setTeamName] = useState("");
@@ -167,7 +170,10 @@ export default function Torneos() {
   };
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-6xl">
+    <div className="min-h-screen bg-background">
+      <Navigation />
+      
+      <div className="container mx-auto px-4 py-8 max-w-6xl">
       <div className="mb-8">
         <h1 className="text-3xl font-bold mb-2 flex items-center gap-2">
           <Trophy className="h-8 w-8 text-primary" />
@@ -384,6 +390,9 @@ export default function Torneos() {
           <p>• Los premios se entregan inmediatamente después de la final</p>
         </CardContent>
       </Card>
+      </div>
+      
+      <Footer />
     </div>
   );
 }
